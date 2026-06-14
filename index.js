@@ -4,7 +4,7 @@ const express = require("express");
 
 // ================= CONFIG =================
 const TOKEN = process.env.MTUxNTgzODc0OTkwNzYxNTc5NQ.Gw5SIG.LIAS-odbILye7wjTFlDcOJlAlBX1OI_SfjkCqw;
-const CLIENT_ID = process.env.1515838749907615795;
+const CLIENT_ID = process.env.CLIENT_ID;
 const REQUIRED_ROLE = "Watch Your Steppest";
 
 const DB_FILE = "./db.json";
