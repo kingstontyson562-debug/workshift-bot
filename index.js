@@ -3,7 +3,7 @@ const fs = require("fs");
 const express = require("express");
 
 // ================= CONFIG =================
-const TOKEN = process.env.MTUxNTgzODc0OTkwNzYxNTc5NQ.Gw5SIG.LIAS-odbILye7wjTFlDcOJlAlBX1OI_SfjkCqw;
+const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
 const REQUIRED_ROLE = "Watch Your Steppest";
 
