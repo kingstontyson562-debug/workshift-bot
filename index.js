@@ -1,170 +1,171 @@
-const { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } = require("discord.js");
-const fs = require("fs");
-const express = require("express");
+const {
+  Client,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  SlashCommandBuilder
+} = require("discord.js");
 
-// ================= CONFIG =================
+const db = require("./database");
+
 const TOKEN = process.env.TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
-const REQUIRED_ROLE = "Watch Your Steppest";
 
-const DB_FILE = "./db.json";
-
-// ================= EXPRESS (keep alive) =================
-const app = express();
-app.get("/", (req, res) => res.send("WorkShift bot is running"));
-app.listen(3000, () => console.log("Web server online"));
-
-// ================= DATABASE =================
-let db = {};
-
-if (fs.existsSync(DB_FILE)) {
-    db = JSON.parse(fs.readFileSync(DB_FILE));
+if (!TOKEN || !CLIENT_ID) {
+  console.log("Missing TOKEN or CLIENT_ID");
 }
 
-function saveDB() {
-    fs.writeFileSync(DB_FILE, JSON.stringify(db, null, 2));
-}
-
-function getUser(id) {
-    if (!db[id]) {
-        db[id] = {
-            cash: 0,
-            job: "Dumpster Diver",
-            jobs: ["Dumpster Diver"],
-            lastWork: 0
-        };
-    }
-    return db[id];
-}
-
-// ================= CLIENT =================
 const client = new Client({
-    intents: [GatewayIntentBits.Guilds]
+  intents: [GatewayIntentBits.Guilds]
 });
 
-// ================= COMMANDS =================
-const commands = [
-    new SlashCommandBuilder().setName("work").setDescription("Work your job and earn money"),
-    new SlashCommandBuilder().setName("balance").setDescription("Check your cash"),
-    new SlashCommandBuilder().setName("shop").setDescription("View available jobs"),
-    new SlashCommandBuilder()
-        .setName("setjob")
-        .setDescription("Change your job")
-        .addStringOption(opt =>
-            opt.setName("job")
-                .setDescription("Job name")
-                .setRequired(true)
-        ),
-    new SlashCommandBuilder()
-        .setName("givecash")
-        .setDescription("Admin give cash")
-        .addUserOption(opt =>
-            opt.setName("user").setRequired(true)
-        )
-        .addIntegerOption(opt =>
-            opt.setName("amount").setRequired(true)
-        )
+// ⏱ cooldowns
+const cooldowns = new Map();
+
+// 🎲 weighted jobs
+const jobs = [
+  { name: "Dumpster Diver", min: 5, max: 15, weight: 50 },
+  { name: "Newspaper Deliverer", min: 20, max: 60, weight: 25 },
+  { name: "Fast Food Worker", min: 50, max: 120, weight: 15 },
+  { name: "Retail Cashier", min: 100, max: 250, weight: 7 },
+  { name: "Construction Worker", min: 200, max: 600, weight: 3 },
+  { name: "Truck Driver", min: 500, max: 1200, weight: 1.5 },
+  { name: "Police Officer", min: 1000, max: 2500, weight: 0.7 },
+  { name: "Doctor", min: 2000, max: 5000, weight: 0.5 },
+  { name: "CEO", min: 5000, max: 15000, weight: 0.2 },
+  { name: "Billionaire Investor", min: 20000, max: 50000, weight: 0.05 }
 ];
 
-// ================= REGISTER COMMANDS =================
+// COMMANDS
+const commands = [
+  new SlashCommandBuilder()
+    .setName("balance")
+    .setDescription("Check your money"),
+
+  new SlashCommandBuilder()
+    .setName("work")
+    .setDescription("Work a random job"),
+
+  new SlashCommandBuilder()
+    .setName("leaderboard")
+    .setDescription("Top richest players"),
+
+  new SlashCommandBuilder()
+    .setName("givecash")
+    .setDescription("Give money (role locked)")
+    .addUserOption(o =>
+      o.setName("user")
+        .setDescription("User")
+        .setRequired(true)
+    )
+    .addIntegerOption(o =>
+      o.setName("amount")
+        .setDescription("Amount")
+        .setRequired(true)
+    )
+].map(c => c.toJSON());
+
 const rest = new REST({ version: "10" }).setToken(TOKEN);
 
+// REGISTER COMMANDS
 client.once("ready", async () => {
-    console.log(`Logged in as ${client.user.tag}`);
+  console.log(`Logged in as ${client.user.tag}`);
 
-    await rest.put(
-        Routes.applicationCommands(CLIENT_ID),
-        { body: commands }
+  await rest.put(Routes.applicationCommands(CLIENT_ID), {
+    body: commands
+  });
+
+  console.log("Commands registered");
+});
+
+// INTERACTIONS
+client.on("interactionCreate", async interaction => {
+  if (!interaction.isChatInputCommand()) return;
+
+  const id = interaction.user.id;
+
+  // 💰 BALANCE
+  if (interaction.commandName === "balance") {
+    const user = db.getUser(id);
+    return interaction.reply(`💰 Balance: ${user.balance}`);
+  }
+
+  // 🛠 WORK (weighted RNG)
+  if (interaction.commandName === "work") {
+    const last = cooldowns.get(id) || 0;
+
+    if (Date.now() - last < 10000) {
+      return interaction.reply("⏳ Wait before working again!");
+    }
+
+    cooldowns.set(id, Date.now());
+
+    const totalWeight = jobs.reduce((a, b) => a + b.weight, 0);
+
+    let rand = Math.random() * totalWeight;
+    let job = jobs[0];
+
+    for (const j of jobs) {
+      if (rand < j.weight) {
+        job = j;
+        break;
+      }
+      rand -= j.weight;
+    }
+
+    const earned =
+      Math.floor(Math.random() * (job.max - job.min + 1)) + job.min;
+
+    db.addBalance(id, earned);
+
+    return interaction.reply(
+      `🛠️ You worked as **${job.name}** and earned **${earned} coins**`
+    );
+  }
+
+  // 🏆 LEADERBOARD
+  if (interaction.commandName === "leaderboard") {
+    const top = db.getTopUsers(10);
+
+    const text = top
+      .map((u, i) => `#${i + 1} <@${u.id}> — 💰 ${u.balance}`)
+      .join("\n");
+
+    return interaction.reply(`🏆 **LEADERBOARD**\n\n${text}`);
+  }
+
+  // 💸 GIVECASH (ROLE LOCKED)
+  if (interaction.commandName === "givecash") {
+    const roleName = "Watch Your Steppest";
+
+    const hasRole = interaction.member.roles.cache.some(
+      r => r.name === roleName
     );
 
-    console.log("Slash commands registered");
+    if (!hasRole) {
+      return interaction.reply("❌ You don't have permission.");
+    }
+
+    const target = interaction.options.getUser("user");
+    const amount = interaction.options.getInteger("amount");
+
+    if (amount <= 0) {
+      return interaction.reply("❌ Invalid amount");
+    }
+
+    const sender = db.getUser(id);
+
+    if (sender.balance < amount) {
+      return interaction.reply("❌ Not enough money");
+    }
+
+    db.addBalance(id, -amount);
+    db.addBalance(target.id, amount);
+
+    return interaction.reply(
+      `💸 You gave ${amount} coins to ${target.username}`
+    );
+  }
 });
 
-// ================= INTERACTIONS =================
-client.on("interactionCreate", async (interaction) => {
-    if (!interaction.isChatInputCommand()) return;
-
-    const user = getUser(interaction.user.id);
-    const now = Date.now();
-
-    // ---------------- WORK ----------------
-    if (interaction.commandName === "work") {
-        if (now - user.lastWork < 15000) {
-            return interaction.reply("⏳ Wait 15 seconds before working again!");
-        }
-
-        user.lastWork = now;
-
-        let payout = 0;
-
-        if (user.job === "Dumpster Diver") {
-            payout = Math.floor(Math.random() * 15) + 1;
-        } else {
-            payout = Math.floor(Math.random() * 50) + 10;
-        }
-
-        user.cash += payout;
-        saveDB();
-
-        return interaction.reply(`💰 You worked as **${user.job}** and earned **$${payout}**`);
-    }
-
-    // ---------------- BALANCE ----------------
-    if (interaction.commandName === "balance") {
-        return interaction.reply(`💵 You have **$${user.cash}**`);
-    }
-
-    // ---------------- SHOP ----------------
-    if (interaction.commandName === "shop") {
-        return interaction.reply(
-            "🛒 **Job Shop**\n" +
-            "Dumpster Diver - FREE\n" +
-            "Cashier - $100\n" +
-            "Mechanic - $300\n" +
-            "Hacker - $1000\n\n" +
-            "Use /setjob to switch jobs"
-        );
-    }
-
-    // ---------------- SET JOB ----------------
-    if (interaction.commandName === "setjob") {
-        const job = interaction.options.getString("job");
-
-        const jobs = {
-            "Dumpster Diver": 0,
-            "Cashier": 100,
-            "Mechanic": 300,
-            "Hacker": 1000
-        };
-
-        if (!(job in jobs)) {
-            return interaction.reply("❌ That job doesn't exist!");
-        }
-
-        user.job = job;
-        user.jobs.push(job);
-        saveDB();
-
-        return interaction.reply(`✅ Your job is now **${job}**`);
-    }
-
-    // ---------------- GIVE CASH ----------------
-    if (interaction.commandName === "givecash") {
-        if (!interaction.member.roles.cache.some(r => r.name === REQUIRED_ROLE)) {
-            return interaction.reply("❌ You don't have permission.");
-        }
-
-        const target = interaction.options.getUser("user");
-        const amount = interaction.options.getInteger("amount");
-
-        const tUser = getUser(target.id);
-        tUser.cash += amount;
-
-        saveDB();
-
-        return interaction.reply(`💸 Gave $${amount} to ${target.username}`);
-    }
-});
-
-// ================= LOGIN =================
 client.login(TOKEN);
